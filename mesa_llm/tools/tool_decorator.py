@@ -293,7 +293,8 @@ def _parse_docstring(
 
     # ---------- validation ---------------------------------------------------------
     sig_params: list[str] = [
-        p.name for p in inspect.signature(func).parameters.values()
+        p.name
+        for p in inspect.signature(func).parameters.values()
         if not (ignore_agent and p.name.lower() == "agent")
     ]
     missing = [p for p in sig_params if p not in param_desc]
@@ -327,7 +328,9 @@ def tool(
 
     def decorator(func: Callable):
         name = func.__name__
-        description, arg_docs, return_docs = _parse_docstring(func, ignore_agent=ignore_agent)
+        description, arg_docs, return_docs = _parse_docstring(
+            func, ignore_agent=ignore_agent
+        )
 
         sig = inspect.signature(func)
         try:
