@@ -16,7 +16,6 @@ from collections import deque
 from unittest.mock import AsyncMock, Mock
 
 from mesa_llm.memory.episodic_memory import EpisodicMemory
-from mesa_llm.memory.memory import Memory
 from mesa_llm.memory.st_lt_memory import STLTMemory
 from mesa_llm.memory.st_memory import ShortTermMemory
 from mesa_llm.reasoning.cot import CoTReasoning
@@ -117,7 +116,8 @@ class TestCoTWithShortTermMemory:
         """CoT plan() adds Observation, Plan, and Plan-Execution to memory."""
         agent, memory, reasoning = self._setup()
 
-        rsp_plan = make_llm_response("Thought 1: reasoning\nAction: move north")
+        plan_content = "Thought 1: reasoning\nAction: move north"
+        rsp_plan = make_llm_response(plan_content)
         rsp_exec = make_llm_response("executing")
         agent.llm.generate = Mock(side_effect=[rsp_plan, rsp_exec])
 
@@ -125,14 +125,20 @@ class TestCoTWithShortTermMemory:
         plan = reasoning.plan(obs=obs)
 
         assert isinstance(plan, Plan)
-        # Memory should have received Observation, Plan, Plan-Execution
-        assert "Observation" in memory.step_content or "Plan" in memory.step_content
+        assert plan.step == 1
+        assert plan.llm_plan is rsp_exec.choices[0].message
+        assert memory.step_content["Observation"]["content"] == str(obs)
+        assert memory.step_content["Plan"]["content"] == plan_content
+        assert memory.step_content["Plan-Execution"]["content"] == str(plan)
+        assert agent._step_display_data["plan_content"] == plan_content
+        assert agent.llm.generate.call_count == 2
 
     def test_async_plan_works(self):
         """aplan() completes without error using ShortTermMemory."""
         agent, memory, reasoning = self._setup()
 
-        rsp_plan = make_llm_response("Thought 1: async reasoning\nAction: act")
+        plan_content = "Thought 1: async reasoning\nAction: act"
+        rsp_plan = make_llm_response(plan_content)
         rsp_exec = make_llm_response("executing")
         agent.llm.agenerate = AsyncMock(side_effect=[rsp_plan, rsp_exec])
         agent.memory.aadd_to_memory = AsyncMock(side_effect=memory.add_to_memory)
@@ -141,6 +147,13 @@ class TestCoTWithShortTermMemory:
         plan = asyncio.run(reasoning.aplan(obs=obs))
 
         assert isinstance(plan, Plan)
+        assert plan.step == 1
+        assert plan.llm_plan is rsp_exec.choices[0].message
+        assert memory.step_content["Observation"]["content"] == str(obs)
+        assert memory.step_content["Plan"]["content"] == plan_content
+        assert memory.step_content["Plan-Execution"]["content"] == str(plan)
+        assert agent._step_display_data["plan_content"] == plan_content
+        assert agent.llm.agenerate.await_count == 2
 
 
 class TestCoTWithSTLTMemory:
@@ -182,7 +195,8 @@ class TestCoTWithSTLTMemory:
         """CoT plan() stores content into STLTMemory."""
         agent, memory, reasoning = self._setup(monkeypatch)
 
-        rsp_plan = make_llm_response("Thought 1: reasoning\nAction: act")
+        plan_content = "Thought 1: reasoning\nAction: act"
+        rsp_plan = make_llm_response(plan_content)
         rsp_exec = make_llm_response("executing")
         agent.llm.generate = Mock(side_effect=[rsp_plan, rsp_exec])
 
@@ -190,17 +204,18 @@ class TestCoTWithSTLTMemory:
         plan = reasoning.plan(obs=obs)
 
         assert isinstance(plan, Plan)
-        assert (
-            "Plan" in memory.step_content
-            or "Plan-Execution" in memory.step_content
-            or "Observation" in memory.step_content
-        )
+        assert plan.step == 1
+        assert memory.step_content["Observation"]["content"] == str(obs)
+        assert memory.step_content["Plan"]["content"] == plan_content
+        assert memory.step_content["Plan-Execution"]["content"] == str(plan)
+        assert agent.llm.generate.call_count == 2
 
     def test_async_plan_works(self, monkeypatch):
         """aplan() completes with STLTMemory."""
         agent, memory, reasoning = self._setup(monkeypatch)
 
-        rsp_plan = make_llm_response("Thought 1: async\nAction: act")
+        plan_content = "Thought 1: async\nAction: act"
+        rsp_plan = make_llm_response(plan_content)
         rsp_exec = make_llm_response("executing")
         agent.llm.agenerate = AsyncMock(side_effect=[rsp_plan, rsp_exec])
         agent.memory.aadd_to_memory = AsyncMock(side_effect=memory.add_to_memory)
@@ -209,6 +224,11 @@ class TestCoTWithSTLTMemory:
         plan = asyncio.run(reasoning.aplan(obs=obs))
 
         assert isinstance(plan, Plan)
+        assert plan.step == 1
+        assert memory.step_content["Observation"]["content"] == str(obs)
+        assert memory.step_content["Plan"]["content"] == plan_content
+        assert memory.step_content["Plan-Execution"]["content"] == str(plan)
+        assert agent.llm.agenerate.await_count == 2
 
 
 class TestCoTWithEpisodicMemory:
@@ -232,6 +252,9 @@ class TestCoTWithEpisodicMemory:
             llm_model="openai/gpt-4o-mini",
             display=False,
         )
+        # Keep EpisodicMemory behavior but avoid extra grading LLM mocks in each test.
+        memory.grade_event_importance = Mock(return_value=3)
+        memory.agrade_event_importance = AsyncMock(return_value=3)
         agent.memory = memory
         return agent, memory, CoTReasoning(agent)
 
@@ -244,22 +267,12 @@ class TestCoTWithEpisodicMemory:
         assert "Current Observation" in prompt
 
     def test_plan_records_to_memory(self, monkeypatch):
-        """CoT plan() calls add_to_memory which triggers importance grading.
-
-        CoT passes string content (obs_str) to add_to_memory for "Observation",
-        "Plan", and "Plan-Execution" types. EpisodicMemory.add_to_memory tries
-        content["importance"] = ... which fails on strings. We bypass the
-        override to test the integration without the grading side-effect.
-        """
+        """CoT plan() writes graded entries into EpisodicMemory."""
         agent, memory, reasoning = self._setup(monkeypatch)
 
-        rsp_plan = make_llm_response("Thought 1: reason\nAction: act")
+        plan_content = "Thought 1: reason\nAction: act"
+        rsp_plan = make_llm_response(plan_content)
         rsp_exec = make_llm_response("done")
-
-        # Bypass EpisodicMemory's grading for string content from CoT
-        memory.add_to_memory = lambda type, content: Memory.add_to_memory(
-            memory, type, content
-        )
 
         agent.llm.generate = Mock(side_effect=[rsp_plan, rsp_exec])
 
@@ -267,24 +280,34 @@ class TestCoTWithEpisodicMemory:
         plan = reasoning.plan(obs=obs)
 
         assert isinstance(plan, Plan)
+        assert memory.step_content["Observation"]["content"] == str(obs)
+        assert memory.step_content["Plan"]["content"] == plan_content
+        assert memory.step_content["Plan-Execution"]["content"] == str(plan)
+        assert memory.step_content["Observation"]["importance"] == 3
+        assert memory.step_content["Plan"]["importance"] == 3
+        assert memory.step_content["Plan-Execution"]["importance"] == 3
+        assert memory.grade_event_importance.call_count == 3
 
     def test_async_plan_works(self, monkeypatch):
         """aplan() completes with EpisodicMemory."""
         agent, memory, reasoning = self._setup(monkeypatch)
 
-        rsp_plan = make_llm_response("Thought 1: async\nAction: act")
+        plan_content = "Thought 1: async\nAction: act"
+        rsp_plan = make_llm_response(plan_content)
         rsp_exec = make_llm_response("done")
         agent.llm.agenerate = AsyncMock(side_effect=[rsp_plan, rsp_exec])
-        # Bypass grading for string content in async path too
-        memory.add_to_memory = lambda type, content: Memory.add_to_memory(
-            memory, type, content
-        )
-        agent.memory.aadd_to_memory = AsyncMock(side_effect=memory.add_to_memory)
 
         obs = Observation(step=0, self_state={}, local_state={})
         plan = asyncio.run(reasoning.aplan(obs=obs))
 
         assert isinstance(plan, Plan)
+        assert memory.step_content["Observation"]["content"] == str(obs)
+        assert memory.step_content["Plan"]["content"] == plan_content
+        assert memory.step_content["Plan-Execution"]["content"] == str(plan)
+        assert memory.step_content["Observation"]["importance"] == 3
+        assert memory.step_content["Plan"]["importance"] == 3
+        assert memory.step_content["Plan-Execution"]["importance"] == 3
+        assert memory.agrade_event_importance.await_count == 3
 
 
 # ===================================================================
@@ -332,7 +355,10 @@ class TestReActWithSTLTMemory:
         prompt_list = reasoning.get_react_prompt(obs)
 
         assert isinstance(prompt_list, list)
-        assert any("Long term memory" in str(p) for p in prompt_list)
+        assert len(prompt_list) == 2
+        assert "Long term memory" in prompt_list[0]
+        assert "current observation" in prompt_list[1]
+        assert str(obs) in prompt_list[1]
 
     def test_plan_records_to_memory(self, monkeypatch):
         """ReAct plan() stores formatted response to memory."""
@@ -350,7 +376,10 @@ class TestReActWithSTLTMemory:
         plan = reasoning.plan(obs=obs)
 
         assert isinstance(plan, Plan)
-        assert "plan" in memory.step_content
+        assert memory.step_content["plan"]["reasoning"] == "test reasoning"
+        assert memory.step_content["plan"]["action"] == "test action"
+        assert reasoning.execute_tool_call.call_args.args[0] == "test action"
+        assert agent.llm.generate.call_count == 1
 
     def test_async_plan_works(self, monkeypatch):
         """aplan() completes with STLTMemory."""
@@ -369,6 +398,10 @@ class TestReActWithSTLTMemory:
         plan = asyncio.run(reasoning.aplan(obs=obs))
 
         assert isinstance(plan, Plan)
+        assert memory.step_content["plan"]["reasoning"] == "test reasoning"
+        assert memory.step_content["plan"]["action"] == "test action"
+        assert reasoning.aexecute_tool_call.await_args.args[0] == "test action"
+        assert agent.llm.agenerate.await_count == 1
 
 
 class TestReActWithShortTermMemory:
@@ -392,8 +425,10 @@ class TestReActWithShortTermMemory:
 
         prompt_list = reasoning.get_react_prompt(obs)
         assert isinstance(prompt_list, list)
+        assert len(prompt_list) == 2
         assert isinstance(prompt_list[0], str)
         assert "current observation" in prompt_list[-1]
+        assert str(obs) in prompt_list[-1]
 
 
 class TestReActWithEpisodicMemory:
@@ -432,8 +467,10 @@ class TestReActWithEpisodicMemory:
 
         prompt_list = reasoning.get_react_prompt(obs)
         assert isinstance(prompt_list, list)
+        assert len(prompt_list) == 2
         assert isinstance(prompt_list[0], str)
         assert "current observation" in prompt_list[-1]
+        assert str(obs) in prompt_list[-1]
 
 
 # ===================================================================
@@ -466,7 +503,8 @@ class TestReWOOWithShortTermMemory:
         """ReWOO plan() stores plan content to memory."""
         agent, memory, reasoning = self._setup()
 
-        rsp_plan = make_llm_response("multi-step plan content")
+        plan_content = "multi-step plan content"
+        rsp_plan = make_llm_response(plan_content)
         rsp_exec = make_llm_response("executing step 1", tool_calls=[])
         agent.llm.generate = Mock(return_value=rsp_plan)
 
@@ -476,13 +514,18 @@ class TestReWOOWithShortTermMemory:
 
         plan = reasoning.plan()
         assert isinstance(plan, Plan)
-        assert "plan" in memory.step_content
+        assert memory.step_content["plan"]["content"] == plan_content
+        reasoning.execute_tool_call.assert_called_once_with(
+            plan_content, selected_tools=None, ttl=1
+        )
+        agent.generate_obs.assert_called_once()
 
     def test_async_plan_works(self):
         """aplan() completes with ShortTermMemory."""
         agent, _memory, reasoning = self._setup()
 
-        rsp_plan = make_llm_response("async plan content")
+        plan_content = "async plan content"
+        rsp_plan = make_llm_response(plan_content)
         rsp_exec = make_llm_response("executing", tool_calls=[])
         agent.llm.agenerate = AsyncMock(return_value=rsp_plan)
 
@@ -492,6 +535,12 @@ class TestReWOOWithShortTermMemory:
 
         plan = asyncio.run(reasoning.aplan())
         assert isinstance(plan, Plan)
+        assert reasoning.current_obs == agent.agenerate_obs.return_value
+        assert reasoning.remaining_tool_calls == 0
+        reasoning.aexecute_tool_call.assert_awaited_once_with(
+            plan_content, selected_tools=None, ttl=1
+        )
+        agent.agenerate_obs.assert_awaited_once()
 
 
 class TestReWOOWithSTLTMemory:
@@ -536,7 +585,8 @@ class TestReWOOWithSTLTMemory:
         """ReWOO plan() stores to STLTMemory."""
         agent, memory, reasoning = self._setup(monkeypatch)
 
-        rsp_plan = make_llm_response("rewoo plan")
+        plan_content = "rewoo plan"
+        rsp_plan = make_llm_response(plan_content)
         rsp_exec = make_llm_response("exec", tool_calls=[])
         agent.llm.generate = Mock(return_value=rsp_plan)
 
@@ -546,13 +596,18 @@ class TestReWOOWithSTLTMemory:
 
         plan = reasoning.plan()
         assert isinstance(plan, Plan)
-        assert "plan" in memory.step_content
+        assert memory.step_content["plan"]["content"] == plan_content
+        reasoning.execute_tool_call.assert_called_once_with(
+            plan_content, selected_tools=None, ttl=1
+        )
+        agent.generate_obs.assert_called_once()
 
     def test_async_plan_works(self, monkeypatch):
         """aplan() completes with STLTMemory."""
-        agent, _memory, reasoning = self._setup(monkeypatch)
+        agent, memory, reasoning = self._setup(monkeypatch)
 
-        rsp_plan = make_llm_response("async rewoo plan")
+        plan_content = "async rewoo plan"
+        rsp_plan = make_llm_response(plan_content)
         rsp_exec = make_llm_response("exec", tool_calls=[])
         agent.llm.agenerate = AsyncMock(return_value=rsp_plan)
 
@@ -562,6 +617,11 @@ class TestReWOOWithSTLTMemory:
 
         plan = asyncio.run(reasoning.aplan())
         assert isinstance(plan, Plan)
+        assert memory.step_content["plan"]["content"] == plan_content
+        reasoning.aexecute_tool_call.assert_awaited_once_with(
+            plan_content, selected_tools=None, ttl=1
+        )
+        agent.agenerate_obs.assert_awaited_once()
 
 
 class TestReWOOWithEpisodicMemory:
@@ -588,6 +648,9 @@ class TestReWOOWithEpisodicMemory:
             llm_model="openai/gpt-4o-mini",
             display=False,
         )
+        # Keep EpisodicMemory behavior but avoid extra grading LLM mocks in each test.
+        memory.grade_event_importance = Mock(return_value=3)
+        memory.agrade_event_importance = AsyncMock(return_value=3)
         agent.memory = memory
         return agent, memory, ReWOOReasoning(agent)
 
@@ -600,22 +663,13 @@ class TestReWOOWithEpisodicMemory:
         assert "Current Observation" in prompt
 
     def test_plan_records_to_memory(self, monkeypatch):
-        """ReWOO plan() works with EpisodicMemory.
-
-        ReWOO passes string content to add_to_memory for the "plan" type.
-        EpisodicMemory.add_to_memory tries content["importance"] = ... which
-        fails on strings. We bypass the override to test the integration.
-        """
+        """ReWOO plan() writes graded entries into EpisodicMemory."""
         agent, memory, reasoning = self._setup(monkeypatch)
 
-        rsp_plan = make_llm_response("episodic rewoo plan")
+        plan_content = "episodic rewoo plan"
+        rsp_plan = make_llm_response(plan_content)
         rsp_exec = make_llm_response("exec", tool_calls=[])
         agent.llm.generate = Mock(return_value=rsp_plan)
-
-        # Bypass EpisodicMemory grading for string content from ReWOO
-        memory.add_to_memory = lambda type, content: Memory.add_to_memory(
-            memory, type, content
-        )
 
         reasoning.execute_tool_call = Mock(
             return_value=Plan(step=1, llm_plan=rsp_exec.choices[0].message)
@@ -623,19 +677,21 @@ class TestReWOOWithEpisodicMemory:
 
         plan = reasoning.plan()
         assert isinstance(plan, Plan)
+        assert memory.step_content["plan"]["content"] == plan_content
+        assert memory.step_content["plan"]["importance"] == 3
+        assert memory.grade_event_importance.call_count == 1
+        reasoning.execute_tool_call.assert_called_once_with(
+            plan_content, selected_tools=None, ttl=1
+        )
 
     def test_async_plan_works(self, monkeypatch):
         """aplan() completes with EpisodicMemory."""
         agent, memory, reasoning = self._setup(monkeypatch)
 
-        rsp_plan = make_llm_response("async episodic plan")
+        plan_content = "async episodic plan"
+        rsp_plan = make_llm_response(plan_content)
         rsp_exec = make_llm_response("exec", tool_calls=[])
         agent.llm.agenerate = AsyncMock(return_value=rsp_plan)
-
-        # Bypass grading for string content
-        memory.add_to_memory = lambda type, content: Memory.add_to_memory(
-            memory, type, content
-        )
 
         reasoning.aexecute_tool_call = AsyncMock(
             return_value=Plan(step=1, llm_plan=rsp_exec.choices[0].message)
@@ -643,3 +699,10 @@ class TestReWOOWithEpisodicMemory:
 
         plan = asyncio.run(reasoning.aplan())
         assert isinstance(plan, Plan)
+        assert memory.step_content["plan"]["content"] == plan_content
+        assert memory.step_content["plan"]["importance"] == 3
+        assert memory.grade_event_importance.call_count == 1
+        reasoning.aexecute_tool_call.assert_awaited_once_with(
+            plan_content, selected_tools=None, ttl=1
+        )
+        agent.agenerate_obs.assert_awaited_once()
