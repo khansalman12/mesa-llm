@@ -1,3 +1,5 @@
+import asyncio
+
 from mesa.agent import Agent
 from mesa.discrete_space import (
     OrthogonalMooreGrid,
@@ -319,12 +321,14 @@ class LLMAgent(Agent):
         """
         Default asynchronous step method for parallel agent execution.
         Subclasses should override this method for custom async behavior.
-        If not overridden, falls back to calling the synchronous step() method.
+        If not overridden, falls back to calling the synchronous step() method
+        via a thread pool executor to avoid blocking the event loop.
         """
         await self.apre_step()
 
         if hasattr(self, "step") and self.__class__.step != LLMAgent.step:
-            self.step()
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, self.step)
 
         await self.apost_step()
 

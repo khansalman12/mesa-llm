@@ -1,5 +1,6 @@
 # tests/test_llm_agent.py
 
+import asyncio
 import json
 import re
 
@@ -683,3 +684,103 @@ async def test_asend_message_stores_serializable_ids(monkeypatch):
     data = json.loads(json.dumps(captured))
     assert data["sender"] == 10
     assert data["recipients"] == [20]
+
+
+# ---------------------------------------------------------------------------
+# astep() executor fallback tests (#140)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_astep_fallback_runs_sync_step_without_blocking(monkeypatch):
+    """astep() falls back to step() via executor when subclass only defines step()."""
+    monkeypatch.setenv("GEMINI_API_KEY", "dummy")
+
+    class SyncOnlyAgent(LLMAgent):
+        def step(self):
+            self.step_called = True
+
+    model = Model(seed=42)
+
+    async def fake_aprocess_step(pre_step=False):
+        pass
+
+    agent = SyncOnlyAgent.create_agents(
+        model,
+        n=1,
+        reasoning=ReActReasoning,
+        system_prompt="test",
+        vision=0,
+        internal_state=[],
+    ).to_list()[0]
+
+    monkeypatch.setattr(agent.memory, "aprocess_step", fake_aprocess_step)
+
+    agent.step_called = False
+    await agent.astep()
+
+    assert agent.step_called is True
+
+
+@pytest.mark.asyncio
+async def test_astep_fallback_does_not_block_concurrent_agents(monkeypatch):
+    """Both agents should complete when run concurrently via asyncio.gather."""
+    monkeypatch.setenv("GEMINI_API_KEY", "dummy")
+
+    execution_order = []
+
+    class SyncOnlyAgent(LLMAgent):
+        def step(self):
+            execution_order.append(self.unique_id)
+
+    model = Model(seed=42)
+
+    async def fake_aprocess_step(pre_step=False):
+        pass
+
+    agents = SyncOnlyAgent.create_agents(
+        model,
+        n=2,
+        reasoning=ReActReasoning,
+        system_prompt="test",
+        vision=0,
+        internal_state=[],
+    ).to_list()
+
+    for agent in agents:
+        monkeypatch.setattr(agent.memory, "aprocess_step", fake_aprocess_step)
+
+    await asyncio.gather(*[agent.astep() for agent in agents])
+
+    assert len(execution_order) == 2
+
+
+@pytest.mark.asyncio
+async def test_astep_with_native_astep_not_affected(monkeypatch):
+    """Agents with their own astep() should work as before."""
+    monkeypatch.setenv("GEMINI_API_KEY", "dummy")
+
+    class AsyncAgent(LLMAgent):
+        async def astep(self):
+            self.async_step_called = True
+
+    model = Model(seed=42)
+
+    async def fake_aprocess_step(pre_step=False):
+        pass
+
+    agent = AsyncAgent.create_agents(
+        model,
+        n=1,
+        reasoning=ReActReasoning,
+        system_prompt="test",
+        vision=0,
+        internal_state=[],
+    ).to_list()[0]
+
+    monkeypatch.setattr(agent.memory, "aprocess_step", fake_aprocess_step)
+
+    agent.async_step_called = False
+    await agent.astep()
+
+    assert agent.async_step_called is True
