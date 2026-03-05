@@ -91,17 +91,16 @@ class TestEpisodicMemory:
         # Test with action
         memory.add_to_memory("action", {"action": "Test action"})
 
-        # Should be empty step_content initially
-        assert memory.step_content != {}
+        # EpisodicMemory should not rely on transient step buffers.
+        assert memory.step_content == {}
         assert len(memory.memory_entries) == 3, (
             "add_to_memory graded the event but never created a MemoryEntry"
         )
 
     def test_finalize_entry_consistency(self, mock_agent):
-        """Minimal tests for the helper function _finalize_event_entry().
+        """Minimal tests for the helper function _finalize_entry().
         - This test ensures that:
         - A `MemoryEntry` object is created and stored in episodic memory.
-        - The graded content is forwarded to the base `Memory.step_content` via `super().add_to_memory()` (regression guard).
         - The stored entry contains the correct importance score.
         - The entry is stamped with the current agent step.
         """
@@ -111,7 +110,7 @@ class TestEpisodicMemory:
         memory._finalize_entry("observation", graded_content)
 
         assert memory.memory_entries[0].content["observation"]["importance"] == 4
-        assert memory.step_content["observation"]["importance"] == 4
+        assert memory.step_content == {}
         assert isinstance(memory.memory_entries[0], MemoryEntry)
         assert memory.memory_entries[0].step == mock_agent.model.steps
 
@@ -170,38 +169,48 @@ class TestEpisodicMemory:
 
     def test_process_step_pre_step(self, mock_agent):
         """
-        The process_step function in the episodic_memory when called with 'pre_step=True' takes whatever is already inside the step_content,
-        then calls the add_to_memory function and then clears the step_content.
-
-        This test function performs the following 2 tests,
-            - Checks whether the add_to_memory function is called correctly when 'pre_step=True.'
-            - Also performs a final check to ensure the step_content is cleared.
+        EpisodicMemory process_step is a no-op: it should not call add_to_memory
+        and should not mutate transient buffers.
         """
         memory = EpisodicMemory(agent=mock_agent, llm_model="provider/test_model")
 
         # Pre-populate step_content
         memory.step_content = {"observation": {"data": "test"}}
 
-        # Spy on add_to_memory and call the process step with param as True
+        # Spy on add_to_memory and call process_step with pre_step=True
         memory.add_to_memory = MagicMock()
         memory.process_step(pre_step=True)
 
-        # Checks if add_to_memory was called once
-        memory.add_to_memory.assert_called_once_with(
-            type="observation",
-            content={"observation": {"data": "test"}},
-        )
+        memory.add_to_memory.assert_not_called()
 
-        # checks whether the step_content is cleared at the end
-        assert memory.step_content == {}
+        # no-op should keep buffer unchanged
+        assert memory.step_content == {"observation": {"data": "test"}}
+
+    def test_process_step_pre_step_does_not_append_entries(self, mock_agent):
+        """
+        Regression test: process_step/pre_step must not append synthetic entries.
+        """
+        memory = EpisodicMemory(agent=mock_agent, llm_model="provider/test_model")
+
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = json.dumps({"grade": 3})
+        memory.llm.generate = MagicMock(return_value=mock_response)
+
+        memory.add_to_memory("action", {"action": "real event"})
+        existing_entries = list(memory.memory_entries)
+        assert len(existing_entries) == 1
+
+        memory.step_content = {"observation": {"data": "buffer-only"}}
+        memory.process_step(pre_step=True)
+
+        assert list(memory.memory_entries) == existing_entries
+        assert len(memory.memory_entries) == 1
+        assert memory.step_content == {"observation": {"data": "buffer-only"}}
 
     @pytest.mark.asyncio
     async def test_aprocess_step_pre_step(self, mock_agent):
         """
-        Asynchronous version of the 'test_process_step_pre_step'
-        Implements the same checks as the sync counterpart function but in an async manner.
-            - checks whether aadd_to_memory function was called correctly
-            - checks whether the step_content was cleared correctly at the end
+        Async process_step is also a no-op for episodic memory.
         """
         memory = EpisodicMemory(agent=mock_agent, llm_model="provider/test_model")
 
@@ -210,13 +219,33 @@ class TestEpisodicMemory:
 
         await memory.aprocess_step(pre_step=True)
 
-        #
-        memory.aadd_to_memory.assert_awaited_once_with(
-            type="observation",
-            content={"observation": {"data": "test"}},
-        )
+        memory.aadd_to_memory.assert_not_awaited()
 
-        assert memory.step_content == {}
+        assert memory.step_content == {"observation": {"data": "test"}}
+
+    @pytest.mark.asyncio
+    async def test_aprocess_step_pre_step_does_not_append_entries(self, mock_agent):
+        """
+        Async regression test: process_step/pre_step must not append synthetic entries.
+        """
+        memory = EpisodicMemory(agent=mock_agent, llm_model="provider/test_model")
+
+        mock_response = MagicMock()
+        mock_response.choices = [
+            MagicMock(message=MagicMock(content=json.dumps({"grade": 3})))
+        ]
+        memory.llm.agenerate = AsyncMock(return_value=mock_response)
+
+        await memory.aadd_to_memory("action", {"action": "real event"})
+        existing_entries = list(memory.memory_entries)
+        assert len(existing_entries) == 1
+
+        memory.step_content = {"observation": {"data": "buffer-only"}}
+        await memory.aprocess_step(pre_step=True)
+
+        assert list(memory.memory_entries) == existing_entries
+        assert len(memory.memory_entries) == 1
+        assert memory.step_content == {"observation": {"data": "buffer-only"}}
 
     @pytest.mark.asyncio
     async def test_async_add_memory_entry(self, mock_agent):
@@ -226,7 +255,7 @@ class TestEpisodicMemory:
         The test function does the following
             - mocks the llm to produece a pre-determined grading.
             - then calls the aad_to_memory function
-            - checks to ensure that the step_content is not empty as the aadd_to_memory function will have added entries into it.
+            - checks that entries are persisted directly into memory_entries.
         """
         memory = EpisodicMemory(agent=mock_agent, llm_model="provider/test_model")
 
@@ -248,8 +277,7 @@ class TestEpisodicMemory:
         for new_entry in memory.memory_entries:
             event_type = next(iter(new_entry.content.keys()))
             assert new_entry.content[event_type]["importance"] == 3
-        # checks to ensure that step content is not empty
-        assert memory.step_content != {}
+        assert memory.step_content == {}
         assert len(memory.memory_entries) == 3, (
             "aadd_to_memory graded the event but never created a MemoryEntry"
         )

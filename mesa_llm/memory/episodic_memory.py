@@ -16,7 +16,11 @@ class EventGrade(BaseModel):
 
 def normalize_dict_values(scores: dict, min_target: float, max_target: float) -> dict:
     """
-    normalise the values in the given using min-max scaling to the given range.
+    Normalize dictionary values to a target range with min-max scaling.
+
+    This mirrors the min-max helper used in the Generative Agents reference
+    retrieval implementation:
+    https://github.com/joonspk-research/generative_agents/blob/main/reverie/backend_server/persona/cognitive_modules/retrieve.py
     """
     if not scores:
         return {}
@@ -42,10 +46,18 @@ def normalize_dict_values(scores: dict, min_target: float, max_target: float) ->
 
 class EpisodicMemory(Memory):
     """
-    Stores memories based on event importance scoring. Each new memory entry is evaluated by a LLM
-    for its relevance and importance (1-5 scale) relative to the agent's current task and previous
-    experiences. Based on a Stanford/DeepMind paper:
-    [Generative Agents: Interactive Simulacra of Human Behavior](https://arxiv.org/pdf/2304.03442)
+    Event-level memory with LLM-based importance scoring and recency-aware retrieval.
+
+    Credit / references:
+    - Paper: Generative Agents: Interactive Simulacra of Human Behavior
+      https://arxiv.org/abs/2304.03442
+    - Reference retrieval code:
+      https://github.com/joonspk-research/generative_agents/blob/main/reverie/backend_server/persona/cognitive_modules/retrieve.py
+
+    This implementation is inspired by the paper's retrieval scoring design
+    (component-wise min-max normalization, then weighted combination). It is
+    not a strict copy of the original code: relevance scoring via embeddings is
+    not implemented yet, and recency is computed from step age.
     """
 
     def __init__(
@@ -53,8 +65,8 @@ class EpisodicMemory(Memory):
         agent: "LLMAgent",
         llm_model: str | None = None,
         display: bool = True,
-        max_capacity: int = 10,
-        considered_entries: int = 5,
+        max_capacity: int = 200,
+        considered_entries: int = 30,
         recency_decay: float = 0.995,
     ):
         """
@@ -160,10 +172,13 @@ class EpisodicMemory(Memory):
 
     def retrieve_top_k_entries(self, k: int) -> list[MemoryEntry]:
         """
-        Retrieve the top k entries based on the importance and recency (Releveance is yet to be added.)
-            - Uses min-max normlaizations to convert both importance and recency inorder to avoid large diffs in values.
-            - Computes total score by adding the normalised importance and recency values.
-            - Returns the list of entries in the final_score list
+        Retrieve the top-k entries using normalized importance and recency.
+
+        Notes:
+        - Inspired by Generative Agents retrieval scoring:
+          recency/importance/relevance are normalized separately and combined.
+        - This implementation currently combines importance + recency only.
+          Relevance (embedding cosine similarity with a focal query) is pending.
         """
         if not self.memory_entries:
             return []
@@ -192,14 +207,13 @@ class EpisodicMemory(Memory):
         return [entry for _, entry in final_scores[:k]]
 
     def _finalize_entry(self, type: str, graded_content: dict):
-        """Shared function for both sync/async add to memory which helps to create memory entry and stores it into a base class."""
+        """Create and persist a finalized episodic entry."""
         new_entry = MemoryEntry(
             agent=self.agent,
             content={type: graded_content},
             step=self.agent.model.steps,
         )
         self.memory_entries.append(new_entry)
-        super().add_to_memory(type, graded_content)
 
     def add_to_memory(self, type: str, content: dict):
         """
@@ -243,20 +257,18 @@ class EpisodicMemory(Memory):
 
     async def aprocess_step(self, pre_step: bool = False):
         """
-        Asynchronous version of process_step
+        Asynchronous version of process_step.
+
+        EpisodicMemory persists entries at add-time and does not use two-phase
+        pre/post-step buffering.
         """
-        if pre_step:
-            await self.aadd_to_memory(type="observation", content=self.step_content)
-            self.step_content = {}
-            return
+        return
 
     def process_step(self, pre_step: bool = False):
         """
-        Process the step of the agent :
-        - Add the new entry to the memory
-        - Display the new entry
+        Process step hook (no-op for episodic memory).
+
+        EpisodicMemory persists entries at add-time and does not use two-phase
+        pre/post-step buffering.
         """
-        if pre_step:
-            self.add_to_memory(type="observation", content=self.step_content)
-            self.step_content = {}
-            return
+        return
