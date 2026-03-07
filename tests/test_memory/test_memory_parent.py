@@ -60,6 +60,22 @@ class TestMemoryEntry:
         assert "alpha" in str_repr
         assert "beta" in str_repr
 
+    def test_memory_entry_str_with_nested_tool_calls_list(self):
+        """Test MemoryEntry string representation with nested tool_calls list under action."""
+        mock_agent = Mock()
+        content = {
+            "action": {
+                "tool_calls": [
+                    {"name": "move_one_step", "response": "moved"},
+                    {"name": "arrest_citizen", "response": "arrested"},
+                ]
+            }
+        }
+        entry = MemoryEntry(content=content, step=1, agent=mock_agent)
+        str_repr = str(entry)
+        assert "move_one_step" in str_repr
+        assert "arrest_citizen" in str_repr
+
 
 class MemoryMock(Memory):
     def __init__(
