@@ -1,15 +1,15 @@
 from mesa.datacollection import DataCollector
 from mesa.model import Model
 
+# tools must be imported so they register with the juror_tool_manager
+import examples.jury_deliberation.tools  # noqa: F401
 from examples.jury_deliberation.agents import (
+    JUROR_PERSONAS,
     ForepersonAgent,
     JurorAgent,
-    JUROR_PERSONAS,
 )
 from mesa_llm.reasoning.reasoning import Reasoning
 
-# tools must be imported so they register with the juror_tool_manager
-import examples.jury_deliberation.tools  # noqa: F401
 
 class JuryDeliberationModel(Model):
     """Jury deliberation model without spatial grid."""
@@ -61,7 +61,9 @@ class JuryDeliberationModel(Model):
                     1 for v in m.current_votes.values() if v == "undecided"
                 ),
                 "Avg_Guilt_Belief": lambda m: (
-                    sum(j.guilt_belief for j in m.jurors) / len(m.jurors) if m.jurors else 0
+                    sum(j.guilt_belief for j in m.jurors) / len(m.jurors)
+                    if m.jurors
+                    else 0
                 ),
                 "Total_Statements": lambda m: len(m.discussion_log),
                 "Statements_Last_Round": lambda m: len(
@@ -117,8 +119,12 @@ class JuryDeliberationModel(Model):
                 self.current_votes[juror.unique_id] = vote
 
             guilty_votes = sum(1 for v in self.current_votes.values() if v == "guilty")
-            not_guilty_votes = sum(1 for v in self.current_votes.values() if v == "not_guilty")
-            undecided_votes = sum(1 for v in self.current_votes.values() if v == "undecided")
+            not_guilty_votes = sum(
+                1 for v in self.current_votes.values() if v == "not_guilty"
+            )
+            undecided_votes = sum(
+                1 for v in self.current_votes.values() if v == "undecided"
+            )
 
             tally = {
                 "round": self.current_round,
@@ -133,12 +139,14 @@ class JuryDeliberationModel(Model):
                 f"[Vote Result] Guilty: {guilty_votes}, "
                 f"Not Guilty: {not_guilty_votes}, Undecided: {undecided_votes}"
             )
-            self.discussion_log.append({
-                "juror_id": "FOREPERSON",
-                "name": "Foreperson",
-                "round": self.current_round,
-                "statement": summary,
-            })
+            self.discussion_log.append(
+                {
+                    "juror_id": "FOREPERSON",
+                    "name": "Foreperson",
+                    "round": self.current_round,
+                    "statement": summary,
+                }
+            )
             print(summary)
 
             self._check_verdict()

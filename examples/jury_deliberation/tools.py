@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING
 
-from examples.jury_deliberation.agents import juror_tool_manager, JurorAgent
+from examples.jury_deliberation.agents import JurorAgent, juror_tool_manager
 from examples.jury_deliberation.case_data import get_evidence_detail
 from mesa_llm.tools.tool_decorator import tool
 
@@ -25,20 +25,23 @@ def speak_to_room(agent: "LLMAgent", statement: str) -> str:
     statement = statement[:400]
 
     # add to the shared discussion log so everyone can read it
-    agent.model.discussion_log.append({
-        "juror_id": agent.unique_id,
-        "name": name,
-        "round": agent.model.current_round,
-        "statement": statement,
-    })
+    agent.model.discussion_log.append(
+        {
+            "juror_id": agent.unique_id,
+            "name": name,
+            "round": agent.model.current_round,
+            "statement": statement,
+        }
+    )
 
     # also push into other jurors' memory so they can recall it later
     other_jurors = [
-        juror for juror in agent.model.agents
+        juror
+        for juror in agent.model.agents
         if isinstance(juror, JurorAgent) and juror.unique_id != agent.unique_id
     ]
     recipient_ids = [j.unique_id for j in other_jurors]
-    
+
     for juror in other_jurors:
         juror.memory.add_to_memory(
             type="message",
@@ -66,14 +69,31 @@ def _estimate_persuasion_direction(statement: str) -> float:
     Gradual persuasion produces better deliberation dynamics."""
     text = statement.lower()
 
-    guilt_signals = ["guilty", "fingerprint", "caught", "evidence against", "convicted",
-                     "prior record", "suspicious", "pawn shop", "broke in"]
-    innocence_signals = ["innocent", "alibi", "reasonable doubt", "not enough",
-                         "circumstantial", "biased", "explained", "legitimate"]
+    guilt_signals = [
+        "guilty",
+        "fingerprint",
+        "caught",
+        "evidence against",
+        "convicted",
+        "prior record",
+        "suspicious",
+        "pawn shop",
+        "broke in",
+    ]
+    innocence_signals = [
+        "innocent",
+        "alibi",
+        "reasonable doubt",
+        "not enough",
+        "circumstantial",
+        "biased",
+        "explained",
+        "legitimate",
+    ]
 
     guilt_score = sum(1 for w in guilt_signals if w in text)
     innocence_score = sum(1 for w in innocence_signals if w in text)
-    
+
     if "evidence" in text or "proof" in text:
         guilt_score += 1
 

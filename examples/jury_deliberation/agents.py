@@ -1,9 +1,8 @@
 from mesa.agent import Agent
 
+from examples.jury_deliberation.case_data import get_case_brief
 from mesa_llm.llm_agent import LLMAgent
 from mesa_llm.tools.tool_manager import ToolManager
-
-from examples.jury_deliberation.case_data import get_case_brief
 
 juror_tool_manager = ToolManager()
 
@@ -149,7 +148,7 @@ class ForepersonAgent(Agent):
             self.speaker_history.append(j.unique_id)
         # keep history from growing forever
         if len(self.speaker_history) > len(jurors) * 3:
-            self.speaker_history = self.speaker_history[-len(jurors) * 2:]
+            self.speaker_history = self.speaker_history[-len(jurors) * 2 :]
 
         return selected
 
@@ -163,7 +162,6 @@ class ForepersonAgent(Agent):
 
 
 class JurorAgent(LLMAgent):
-
     def __init__(self, model, reasoning, llm_model, persona, vision=-1):
         system_prompt = _build_system_prompt(persona)
         internal_state = [
@@ -238,7 +236,9 @@ class JurorAgent(LLMAgent):
         all_jurors = [a for a in self.model.agents if isinstance(a, JurorAgent)]
         avg = sum(j.guilt_belief for j in all_jurors) / len(all_jurors)
         conformity_nudge = (avg - self.guilt_belief) * 0.05
-        self.guilt_belief = max(0.0, min(1.0, self.guilt_belief + shift + conformity_nudge))
+        self.guilt_belief = max(
+            0.0, min(1.0, self.guilt_belief + shift + conformity_nudge)
+        )
 
     def cast_formal_vote(self):
         """Called during voting rounds. Updates vote based on current belief."""

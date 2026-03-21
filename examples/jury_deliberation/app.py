@@ -66,7 +66,9 @@ def DiscussionLog(model):
         if recent:
             lines = []
             for entry in recent:
-                lines.append(f"**{entry['name']}** (Round {entry['round']}): {entry['statement']}")
+                lines.append(
+                    f"**{entry['name']}** (Round {entry['round']}): {entry['statement']}"
+                )
             solara.Markdown("\n\n".join(lines))
         else:
             solara.Text("No discussion yet.")
@@ -87,7 +89,9 @@ def VerdictStatus(model):
     if hasattr(model, "jurors") and model.jurors:
         rows = []
         for j in model.jurors:
-            belief_bar = "\u2588" * int(j.guilt_belief * 10) + "\u2591" * (10 - int(j.guilt_belief * 10))
+            belief_bar = "\u2588" * int(j.guilt_belief * 10) + "\u2591" * (
+                10 - int(j.guilt_belief * 10)
+            )
             rows.append(
                 f"| {j.persona['name']} | {j.persona['occupation']} | "
                 f"{j.guilt_belief:.2f} | `{belief_bar}` | {j.vote} |"
