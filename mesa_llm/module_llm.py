@@ -141,7 +141,21 @@ class ModuleLLM:
         if self.api_base:
             completion_kwargs["api_base"] = self.api_base
 
-        response = completion(**completion_kwargs)
+        try:
+            response = completion(**completion_kwargs)
+        except RateLimitError as e:
+            raise RateLimitError(
+                message=(
+                    f"Rate limit exceeded for model '{self.llm_model}'. "
+                    "You have exceeded your API quota. "
+                    "Please wait a few minutes and try again, "
+                    "or switch to a different model. "
+                    "To check your quota visit: "
+                    "https://ai.google.dev/gemini-api/docs/rate-limits"
+                ),
+                llm_provider=self.llm_model.split("/")[0],
+                model=self.llm_model,
+            ) from e
 
         return response
 
